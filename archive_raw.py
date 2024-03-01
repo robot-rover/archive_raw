@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from textwrap import dedent
 from typing import Dict, List, Optional, Tuple
@@ -14,6 +15,8 @@ from datetime import datetime
 import shutil
 from appdirs import user_cache_dir
 import json
+
+from tqdm import tqdm
 
 # structure: absolute dest path / rel image path / (file size, file hash)
 CACHE_FILE = Path(user_cache_dir("archive_raw", "rr")) / "cache.json"
@@ -75,8 +78,7 @@ def build_lookup(dest_cache: DestCache) -> Lookup:
         lookup[rel_path.name].append((data, rel_path))
     return lookup
 
-def check_in_lookup(lookup: Lookup, file: Path, file_data: Data):
-    name = file.name
+def check_in_lookup(lookup: Lookup, name: str, file_data: Data):
     if name not in lookup:
         return None
 
@@ -124,21 +126,24 @@ def get_file_data(path: Path, date_taken=None, file_size=None):
     return (file_size, date_taken)
 
 class MoveTask:
-    SPLIT_PAT = re.compile(r'(?:[^\s,"]|"(?:\\.|[^"])*")+')
+    SPLIT_PAT = re.compile(r'(\w+) ([^\s,"]+|"[^"]*") ([^\s,"]+|"[^"]*")(?: (.*))?$')
     WHITE_PAT = re.compile(r'\s')
-    def __init__(self, action, src, dest, comment):
+    def __init__(self, action, src, dest, comment=None):
         self.action = action
         self.src = src
         self.dest = dest
-        self.comment = comment
+        self.comment = comment if comment is not None else ""
 
     @classmethod
     def from_line(cls, line: str):
-        return cls(*cls.SPLIT_PAT.findall(line))
+        m = cls.SPLIT_PAT.match(line)
+        if m is None:
+            raise ValueError(f'Invalid Line: "{line}"')
+        return cls(*m.groups())
 
     @staticmethod
     def opt_quote(phrase: str):
-        phrase = phrase.replace('"', '\\"')
+        phrase = str(phrase)
         if MoveTask.WHITE_PAT.search(phrase) is None:
             return str(phrase)
         else:
@@ -157,24 +162,34 @@ class MoveTask:
         """)
 
     def __str__(self):
-        ' '.join(self.opt_quote(field) for field in [self.action, self.src, self.dest, self.comment])
+        s = ' '.join(self.opt_quote(field) for field in [self.action, self.src, self.dest])
+        if self.comment is not None and len(self.comment) > 0:
+            s += f' {self.comment}'
+        return s
 
-def interactive_tasks(tasks: List[MoveTask], is_move: bool):
+def interactive_tasks(tasks: List[MoveTask], is_move: bool, init_line: Optional[int]=None):
     with tempfile.NamedTemporaryFile(mode='wt', delete=False) as tf:
         file_path = tf.name
         print(MoveTask.header(is_move), file=tf)
         for task in tasks:
             print(task, file=tf)
 
-    subprocess.run([os.environ.get("EDITOR", "vim"), file_path], shell=True, check=True)
+    args = [os.environ.get("EDITOR", "vim"), str(file_path)]
+    if init_line is not None and 'vi' in args[0]:
+        args.append(f"+{init_line}")
+    subprocess.run(args, check=True)
 
     with open(file_path, 'rt') as file:
-        return [
-            MoveTask.from_line(line)
-            for line in file.readlines()
-            if not line.lstrip().startswith('#')
-        ]
-
+        tasks = []
+        for line in file.readlines():
+            stripped = line.strip()
+            if len(stripped) == 0 or stripped.startswith('#'):
+                continue
+            try:
+                tasks.append(MoveTask.from_line(line))
+            except ValueError:
+                print(f'Warn: unrecognized line "{line}"')
+        return tasks
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -183,6 +198,7 @@ def parse_args():
     parser.add_argument(metavar="SRC", dest='src', type=str, help="The source directory (should be called DCIM)")
     parser.add_argument("-m", dest='move', action='store_true', help="Should the files be moved (default: copy)")
     parser.add_argument("-n", dest='dry', action='store_true', help="Do a dry run (no filesystem changes)")
+    parser.add_argument("-a", dest='all', action='store_true', help="Move all new files instead of just the most recent sequence")
     parser.add_argument("-v", dest='verbose', action='store_true', help='Show extra information')
     return parser.parse_args()
 
@@ -222,26 +238,67 @@ for file in src.rglob("*"):
     file_size, date_taken = file_data
     file_data = (file_data[0], str(file_data[1]))
 
-    lookup_match = check_in_lookup(dest_lookup, file, file_data)
-    if lookup_match is not None:
-        print(f'Skip {file} (in {lookup_match[1].parent})')
-        if args.verbose:
-            print(f'  size: {file_size}, time: {date_taken}')
-        continue
-
     date = str(datetime.fromisoformat(date_taken).date())
     target_dir = dest / date
 
-    task = MoveTask('y', file, target_dir / file.name, "")
+    task = MoveTask('y', file.relative_to(src), f"{date}/{file.name}", "")
 
-    # print(f'{"Move" if args.move else "Copy"} {file} to {target_dir}')
+    lookup_match = check_in_lookup(dest_lookup, file.name, file_data)
+    if lookup_match is not None:
+        task.comment = f'in {lookup_match[1].parent}'
+        task.action = 'n'
+
     if args.verbose:
-        task.comment = f'size: {file_size}, time: {date_taken}'
+        task.comment += f'size: {file_size}, time: {date_taken}'
 
+    tasks.append(task)
 
-    # if not args.dry:
-    #     target_dir.mkdir(exist_ok=True)
-    #     if args.move:
-    #         shutil.move(file, target_dir / file.name)
-    #     else:
-    #         shutil.copy2(file, target_dir / file.name)
+init_line = 8
+if not args.all:
+    for idx, task in reversed(list(enumerate(tasks))):
+        if task.action == 'n':
+            if idx + 1 == len(tasks):
+                tasks[-1].action = 'c'
+                init_line += idx
+            else:
+                tasks[idx + 1].action = 'f'
+            init_line += idx + 1
+            break
+
+tasks = interactive_tasks(tasks, args.move, init_line)
+
+c_idx = None
+f_idx = None
+
+for idx, task in enumerate(tasks):
+    if task.action == 'c':
+        c_idx = idx
+    elif task.action == 'f':
+        f_idx = idx
+    elif task.action not in ('y', 'n'):
+        print("Warn: Unrecognized action for task:", str(task), sep='\n')
+
+if c_idx is not None:
+    print('found cancel action, exiting', str(tasks[c_idx]), sep='\n')
+    sys.exit()
+
+if f_idx is not None:
+    print('found first action', str(tasks[f_idx]), sep='\n')
+    tasks = tasks[f_idx:]
+
+tasks = [task for task in tasks if task.action in ('y', 'f')]
+
+with tqdm(tasks, disable=args.dry) as pbar:
+    for task in pbar:
+        pbar.set_description(task.dest)
+        source = src / task.src
+        assert source.exists(), f'{source} does not exist!'
+        target = dest / task.dest
+        target.parent.mkdir(exist_ok=True)
+        if not args.dry:
+            if args.move:
+                shutil.move(source, target)
+            else:
+                shutil.copy2(source, target)
+        else:
+            print(str(task))
