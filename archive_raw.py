@@ -21,7 +21,7 @@ from tqdm import tqdm
 # structure: absolute dest path / rel image path / (file size, file hash)
 CACHE_FILE = Path(user_cache_dir("archive_raw", "rr")) / "cache.json"
 
-SKIP_EXTENSIONS = ('.xmp',)
+SKIP_EXTENSIONS = ('.xmp', '.pto')
 
 EXIF_DATE_TIME_ORIG = 306
 
@@ -51,7 +51,7 @@ def hash_file(path):
 
 def refresh_cache(root: Path, old_cache: DestCache) -> DestCache:
     new_cache = dict()
-    for file in root.rglob("*"):
+    for file in tqdm(list(root.rglob("*")), desc="Building cache"):
         if not file.is_file():
             continue
         if file.suffix in SKIP_EXTENSIONS:
@@ -65,8 +65,10 @@ def refresh_cache(root: Path, old_cache: DestCache) -> DestCache:
                 new_data = new_size, old_time
         if new_data is None:
             new_data = get_file_data(file, file_size=new_size)
-            assert new_data is not None, f'Failed to parse file from dest: {file}'
-        new_cache[rel_path] = new_data
+        if new_data is None:
+            print(f'WARN: failed to parse file from dest: {file}')
+        else:
+            new_cache[rel_path] = new_data
     return new_cache
 
 def build_lookup(dest_cache: DestCache) -> Lookup:
@@ -227,7 +229,7 @@ dest_lookup = build_lookup(dest_cache)
 
 tasks = []
 
-for file in src.rglob("*"):
+for file in tqdm(list(src.rglob("*")), desc="Reading new images"):
     if file.is_dir():
         continue
 
