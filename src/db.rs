@@ -1,7 +1,7 @@
-use std::{cmp::Ordering, ffi::OsStr, fs, path::Path};
+use std::path::Path;
 
+use blake3::Hash;
 use rusqlite::{config::DbConfig, params, Connection};
-use anyhow::anyhow;
 
 use crate::images::{ImageAdv, ImageBasic};
 
@@ -36,7 +36,7 @@ pub fn create_conn(db_file: &Path, clean: bool) -> anyhow::Result<Connection> {
         |row| row.get(0),
     )?;
 
-    if application_id != APPLICATION_ID {
+    if clean || application_id != APPLICATION_ID {
         // TODO: Perhaps ask before doing this?
         println!("application_id is unset, resetting database");
         // Reset the database
@@ -96,7 +96,7 @@ where I: IntoIterator<Item=&'a ImageBasic> {
     )?;
 
     for image in images {
-        stmt.execute(params![&image.get_name()?, &image.path, &image.size])?;
+        stmt.execute(params![&image.get_name(), &image.path, &image.size])?;
     }
 
     Ok(())
@@ -150,13 +150,59 @@ pub fn add_to_table<'a, I>(conn: &Connection, table: TableType, images: I) -> an
 where I: IntoIterator<Item=&'a ImageAdv> {
     let name = table.to_sql(false);
     let mut stmt = conn.prepare(&format!("
-        INSERT INTO {name} (name, path, size, checksum)
-        VALUES (?1, ?2, ?3, ?4)
+        INSERT INTO {name} (name, path, size, checksum, date)
+        VALUES (?1, ?2, ?3, ?4, ?5)
     "))?;
 
     for image in images.into_iter() {
-        stmt.execute(params![&image.basic.get_name()?, &image.basic.path, &image.basic.size, &image.checksum.as_bytes()])?;
+        stmt.execute(params![&image.basic.get_name(), &image.basic.path, &image.basic.size, &image.checksum.as_bytes(), &image.date])?;
     }
+
+    Ok(())
+}
+
+pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>> {
+    let mut stmt = conn.prepare("
+        SELECT on_camera.path, on_camera.size, on_camera.checksum, on_camera.date
+        FROM on_camera
+        LEFT JOIN on_disk
+        ON on_disk.name = on_camera.name
+            AND on_disk.size = on_camera.size
+            AND on_disk.checksum = on_camera.checksum
+            AND on_disk.date = on_camera.date
+        WHERE on_disk.name IS NULL
+            AND on_camera.saved = 0
+    ")?;
+
+    let images = stmt.query_map([], |row| Ok(ImageAdv {
+        basic: ImageBasic {
+            path: row.get(0)?,
+            size: row.get(1)?,
+        },
+        checksum: Hash::from_bytes(row.get::<_, [u8; blake3::OUT_LEN]>(2)?),
+        date: row.get(3)?,
+    }))?.collect::<Result<Vec<_>, _>>()?;
+
+    Ok(images)
+}
+
+pub fn set_images_as_archived<'a, I>(conn: &Connection, saved: I) -> anyhow::Result<()>
+where I: IntoIterator<Item=&'a ImageAdv> {
+    conn.execute_batch(include_str!("schema/saved.sql"))?;
+    let mut stmt = conn.prepare("
+        INSERT INTO make_saved (path)
+        VALUES (?1)
+    ")?;
+
+    for image in saved.into_iter() {
+        stmt.execute([&image.basic.path])?;
+    }
+
+    conn.execute("
+        UPDATE on_camera
+        SET saved = 1
+        WHERE path in (SELECT path FROM make_saved)
+    ", [])?;
 
     Ok(())
 }

@@ -8,7 +8,7 @@ anyhow = "1.0.95"
 blake3 = { version = "1.5.5", features = ["mmap"] }
 chrono = "0.4.38"
 dotenvy = "0.15.7"
-nom-exif = "2.3.1"
 pico-args = { version = "0.5.0", features = ["combined-flags"] }
-rusqlite = { version = "0.32.1", features = ["bundled"] }
+rexiv2 = "0.10.0"
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono"] }
 walkdir = "2.5.0"

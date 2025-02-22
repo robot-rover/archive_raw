@@ -3,8 +3,8 @@ mod db;
 mod images;
 
 use args::parse_args;
-use db::{add_to_table, populate_new_table, update_table_get_new, TableType::*};
-use images::{load_images, ImageAdv, ImageBasic};
+use db::{add_to_table, get_images_to_archive, populate_new_table, set_images_as_archived, update_table_get_new, TableType::*};
+use images::{archive_image, load_images, ImageAdv, ImageBasic};
 
 fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
@@ -15,7 +15,7 @@ fn main() -> anyhow::Result<()> {
     // Read file structure on disk, find rows that don't exist in in on_disk
     println!("Scanning target at {}", args.target_dir.display());
     let target_images = load_images::<ImageBasic>(&args.target_dir)?;
-    println!("Found {} target images", target_images.len());
+    println!("  Found {} target images", target_images.len());
 
     {
         let trans = conn.transaction()?;
@@ -25,8 +25,10 @@ fn main() -> anyhow::Result<()> {
         // For those new rows, read their metadata by actually opening the files
         let new_on_disk_adv = new_on_disk
             .into_iter()
-            .map(|i| ImageAdv::from_basic(i))
-            .collect::<Result<Vec<_>, _>>()?;
+            .filter_map(|i| {
+                ImageAdv::from_basic(i).inspect_err(|_err| {} /* TODO: Log error here*/).ok()
+            })
+            .collect::<Vec<_>>();
 
         // With that new metadata, add the rows to the database
         add_to_table(&trans, Disk, &new_on_disk_adv)?;
@@ -36,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     // Read the file structure on the camera, find the rows that don't exist in on_camera
     println!("Finding images in {:?}", args.source_dir);
     let images = load_images::<ImageBasic>(&args.source_dir)?;
-    println!("Found {} images", images.len());
+    println!("  Found {} images", images.len());
 
     {
         let trans = conn.transaction()?;
@@ -46,12 +48,30 @@ fn main() -> anyhow::Result<()> {
         // For those new rows, read their metadata by actually opening the files
         let new_on_camera_adv = new_on_camera
             .into_iter()
-            .map(|i| ImageAdv::from_basic(i))
-            .collect::<Result<Vec<_>, _>>()?;
+            .filter_map(|i| {
+                ImageAdv::from_basic(i).inspect_err(|_err| {} /* TODO: Log error here*/).ok()
+            })
+            .collect::<Vec<_>>();
 
         // With that new metadata, add the rows to the database
         add_to_table(&trans, Camera, &new_on_camera_adv)?;
 
+        trans.commit()?;
+    }
+
+    let images_to_archive = get_images_to_archive(&conn)?;
+    println!("Images to archive: {:?}", images_to_archive);
+
+    {
+        let trans = conn.transaction()?;
+        let success = images_to_archive.into_iter().filter_map(|image| {
+            archive_image(&image, &args.target_dir)
+                .inspect_err(|_err| {} /* TODO Log error */)
+                .map(|_| image)
+                .ok()
+        }).collect::<Vec<_>>();
+
+        set_images_as_archived(&trans, success.iter())?;
         trans.commit()?;
     }
 

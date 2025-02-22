@@ -9,9 +9,9 @@ tables DB="${RAWDB_DB}":
   -sqlite3 {{ DB }} '.headers on' 'PRAGMA table_info(new_on_camera)'
 
 values DB="${RAWDB_DB}":
-  sqlite3 {{ DB }} '.headers on' 'SELECT * FROM on_disk LIMIT 10'
+  sqlite3 {{ DB }} '.headers on' 'SELECT name, path, size, date FROM on_disk LIMIT 10'
   -sqlite3 {{ DB }} '.headers on' 'SELECT * FROM new_on_disk LIMIT 10'
-  sqlite3 {{ DB }} '.headers on' 'SELECT * FROM on_camera LIMIT 10'
+  sqlite3 {{ DB }} '.headers on' 'SELECT name, path, size, date, saved FROM on_camera LIMIT 10'
   -sqlite3 {{ DB }} '.headers on' 'SELECT * FROM new_on_camera LIMIT 10'
 
 sample DB="${RAWDB_DB}":

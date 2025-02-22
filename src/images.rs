@@ -1,8 +1,9 @@
-use std::{ffi::OsStr, path::Path};
-use anyhow::anyhow;
+use std::{ffi::OsStr, fs, path::Path};
+use anyhow::{anyhow, bail};
 use blake3::Hash;
 
-use chrono::{NaiveDateTime, TimeDelta};
+use chrono::NaiveDateTime;
+use rexiv2::Metadata;
 use walkdir::{DirEntry, WalkDir};
 
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "cr2"];
@@ -31,12 +32,12 @@ impl ImageExt for ImageBasic {
 }
 
 impl ImageBasic {
-    pub fn get_name(&self) -> anyhow::Result<&str> {
+    pub fn get_name(&self) -> &str {
         AsRef::<Path>::as_ref(&self.path)
             .file_name()
             .and_then(OsStr::to_str)
             .map(|s| s.as_ref())
-            .ok_or_else(|| anyhow!("Invalid path encountered: {}", self.path))
+            .expect("Convertion from str to path and back failed")
     }
 }
 
@@ -44,31 +45,32 @@ impl ImageBasic {
 pub struct ImageAdv {
     pub basic: ImageBasic,
     pub checksum: Hash,
-    pub taken: Option<NaiveDateTime>,
-    pub duration: Option<TimeDelta>,
+    pub date: NaiveDateTime,
 }
 
 impl ImageAdv {
     pub fn from_basic(basic: ImageBasic) -> anyhow::Result<Self> {
-        //let file = fs::File::open(basic.path)?;
+        let content = fs::read(&basic.path)?;
 
-        let mut hasher = blake3::Hasher::new();
-        hasher.update_mmap(&basic.path)?;
-        let checksum = hasher.finalize();
+        let metadata = Metadata::new_from_buffer(&content)?;
+        if !metadata.has_exif() {
+            bail!("No exif data found in {}", basic.path);
+        }
 
-        // TODO: read EXIF data and video duration
-        Ok(ImageAdv {
-            basic,
-            checksum,
-            taken: None,
-            duration: None,
-        })
+        let Some(date) = metadata.get_tag_string("Exif.Image.DateTime")
+            .ok()
+            .and_then(|s| NaiveDateTime::parse_from_str(&s, "%Y:%m:%d %H:%M:%S").ok())
+        else { bail!("Malformed or missing exif date found in {}", basic.path) } ;
+
+        let checksum = blake3::hash(&content);
+
+        Ok(ImageAdv { basic, checksum, date })
     }
 }
 
 impl ImageExt for ImageAdv {
     fn from_entry(entry: &DirEntry) -> anyhow::Result<Self> {
-        Self::from_basic(ImageBasic::from_entry(entry)?)
+        ImageAdv::from_basic(ImageBasic::from_entry(entry)?)
     }
 }
 
@@ -90,3 +92,23 @@ pub fn load_images<I: ImageExt>(dir: &Path) -> anyhow::Result<Vec<I>> {
     Ok(vec)
 }
 
+pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()> {
+    let mut target = target_base.join(image.date.format("%Y-%m-%d").to_string());
+    fs::create_dir_all(&target)?;
+    target.push(image.basic.get_name());
+
+    if fs::exists(&target)? {
+        bail!("File {} already exists", target.display());
+    }
+
+    fs::copy(&image.basic.path, &target)?;
+
+    let new_hash = blake3::hash(&fs::read(&target)?);
+
+    if new_hash != image.checksum {
+        fs::remove_file(&target)?;
+        bail!("Checksum mismatch for {}", target.display());
+    }
+
+    Ok(())
+}
