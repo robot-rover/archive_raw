@@ -1,6 +1,8 @@
 use std::path::Path;
 
+use log::debug;
 use blake3::Hash;
+use log::info;
 use rusqlite::{config::DbConfig, params, Connection};
 
 use crate::images::{ImageAdv, ImageBasic};
@@ -38,7 +40,7 @@ pub fn create_conn(db_file: &Path, clean: bool) -> anyhow::Result<Connection> {
 
     if clean || application_id != APPLICATION_ID {
         // TODO: Perhaps ask before doing this?
-        println!("application_id is unset, resetting database");
+        debug!("application_id is unset, resetting database");
         // Reset the database
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_RESET_DATABASE, true)?;
         conn.execute("VACUUM", [])?;
@@ -47,18 +49,14 @@ pub fn create_conn(db_file: &Path, clean: bool) -> anyhow::Result<Connection> {
         conn.pragma_update(None, "application_id", APPLICATION_ID)?;
     }
 
-    println!("Application ID: {}", application_id);
-
     let user_version: i64 = conn.pragma_query_value(
         None,
         "user_version",
         |row| row.get(0),
     )?;
 
-    println!("User Version: {}", user_version);
-
     if user_version != USER_VERSION {
-        println!("Updating schema from version {} to {}", user_version, USER_VERSION);
+        debug!("Updating schema from version {} to {}", user_version, USER_VERSION);
         update_schema(&conn, user_version)?;
         conn.pragma_update(None, "user_version", USER_VERSION)?;
     }
@@ -117,8 +115,7 @@ pub fn update_table_get_new(conn: &Connection, table: TableType) -> anyhow::Resu
             WHERE {new_name}.name IS NULL
         )
     "), [])?;
-
-    println!("Deleting {} image entries that no longer exist", delete_count);
+    info!("{name} - Deleting {} image entries that no longer exist", delete_count);
 
     let keep_count = conn.query_row(&format!("
         SELECT COUNT(*)
@@ -127,7 +124,7 @@ pub fn update_table_get_new(conn: &Connection, table: TableType) -> anyhow::Resu
         ON {name}.path = {new_name}.path
             AND {name}.size = {new_name}.size
     "), [], |row| row.get::<_, u64>(0))?;
-    println!("Keeping {} existing image entries", keep_count);
+    info!("{name} - Keeping {} existing image entries", keep_count);
 
     let mut stmt = conn.prepare(&format!("
         SELECT {new_name}.path, {new_name}.size
@@ -142,6 +139,7 @@ pub fn update_table_get_new(conn: &Connection, table: TableType) -> anyhow::Resu
             path: row.get(0)?,
             size: row.get(1)?,
     }))?.collect::<Result<Vec<_>, _>>()?;
+    info!("{name} - detected {} new images", im_basic.len());
 
     Ok(im_basic)
 }
@@ -201,7 +199,10 @@ where I: IntoIterator<Item=&'a ImageAdv> {
     conn.execute("
         UPDATE on_camera
         SET saved = 1
-        WHERE path in (SELECT path FROM make_saved)
+        WHERE path in (
+            SELECT path
+            FROM make_saved
+        )
     ", [])?;
 
     Ok(())
