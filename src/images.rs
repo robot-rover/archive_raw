@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, fs, path::Path};
+use std::{ffi::OsStr, fs, io, path::Path};
 use anyhow::{anyhow, bail};
 use blake3::Hash;
 
@@ -6,13 +6,11 @@ use chrono::NaiveDateTime;
 use rexiv2::Metadata;
 use walkdir::{DirEntry, WalkDir};
 
-const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "cr2"];
-
 pub trait ImageExt: Sized {
     fn from_entry(entry: &DirEntry) -> anyhow::Result<Self>;
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImageBasic {
     pub path: String,
     pub size: u64,
@@ -41,7 +39,7 @@ impl ImageBasic {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImageAdv {
     pub basic: ImageBasic,
     pub checksum: Hash,
@@ -74,22 +72,12 @@ impl ImageExt for ImageAdv {
     }
 }
 
-pub fn load_images<I: ImageExt>(dir: &Path) -> anyhow::Result<Vec<I>> {
-    let mut vec = Vec::new();
-    for entry in WalkDir::new(dir) {
-        let entry = entry?;
-        if !entry.file_type().is_file() { continue }
-        for ext in IMAGE_EXTS {
-            let file_name = entry.file_name();
-            let local_path: &Path = file_name.as_ref();
-            if local_path.extension() == Some(ext.as_ref()) {
-                vec.push(I::from_entry(&entry)?);
-                break;
-            }
-        }
-    }
-
-    Ok(vec)
+pub fn load_images<I: ImageExt>(dir: &Path) -> impl Iterator<Item = anyhow::Result<I>> {
+    WalkDir::new(dir).into_iter().map(|res| match res {
+        Ok(entry) if entry.file_type().is_file() => Ok(Some(I::from_entry(&entry)?)),
+        Ok(_dir_entry) => Ok(None),
+        Err(err) => Err(err.into()),
+    }).filter_map(Result::transpose)
 }
 
 pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()> {

@@ -1,4 +1,0 @@
-DROP TABLE IF EXISTS make_saved;
-CREATE TABLE make_saved(
-  path TEXT NOT NULL
-) STRICT;

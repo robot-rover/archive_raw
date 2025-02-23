@@ -20,8 +20,10 @@ fn main() -> anyhow::Result<()> {
     let mut conn = db::create_conn(&args.database_path, args.clean)?;
 
     // Read file structure on disk, find rows that don't exist in in on_disk
+    // An unknown file in the target is an error
     eprintln!("Scanning target at {}", args.target_dir.display());
-    let target_images = load_images::<ImageBasic>(&args.target_dir)?;
+    let target_images = load_images::<ImageBasic>(&args.target_dir)
+        .collect::<Result<Vec<_>, _>>()?;
     info!("  Found {} target images", target_images.len());
 
     {
@@ -44,7 +46,9 @@ fn main() -> anyhow::Result<()> {
 
     // Read the file structure on the camera, find the rows that don't exist in on_camera
     eprintln!("Finding images in {:?}", args.source_dir);
-    let images = load_images::<ImageBasic>(&args.source_dir)?;
+    let images = load_images::<ImageBasic>(&args.source_dir)
+        .filter_map(|res| res.inspect_err(|err| warn!("{}", err)).ok())
+        .collect::<Vec<_>>();
     info!("  Found {} images", images.len());
 
     {

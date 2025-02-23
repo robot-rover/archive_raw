@@ -10,7 +10,7 @@ use crate::images::{ImageAdv, ImageBasic};
 const APPLICATION_ID: i64 = 0xBEEF;
 const USER_VERSION: i64 = 2;
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum TableType {
     Disk,
     Camera,
@@ -81,13 +81,12 @@ fn update_schema(conn: &Connection, current_user_version: i64) -> anyhow::Result
 pub fn populate_new_table<'a, I>(conn: &Connection, table: TableType, images: I) -> anyhow::Result<()>
 where I: IntoIterator<Item=&'a ImageBasic> {
     let name = table.to_sql(true);
-    conn.execute_batch(&format!("
-        DROP TABLE IF EXISTS {name};
-        CREATE TABLE {name} (
+    conn.execute(&format!("
+        CREATE TEMP TABLE {name} (
           name     TEXT NOT NULL,
           path     TEXT NOT NULL,
           size      INT NOT NULL
-        ) STRICT;"))?;
+        ) STRICT"), [])?;
 
     let mut stmt = conn.prepare(
         &format!("INSERT INTO {name} (name, path, size) VALUES (?1, ?2, ?3)")
@@ -186,7 +185,11 @@ pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>>
 
 pub fn set_images_as_archived<'a, I>(conn: &Connection, saved: I) -> anyhow::Result<()>
 where I: IntoIterator<Item=&'a ImageAdv> {
-    conn.execute_batch(include_str!("schema/saved.sql"))?;
+    conn.execute("
+        CREATE TEMP TABLE make_saved(
+          path TEXT NOT NULL
+        ) STRICT;
+    ", [])?;
     let mut stmt = conn.prepare("
         INSERT INTO make_saved (path)
         VALUES (?1)
@@ -206,4 +209,121 @@ where I: IntoIterator<Item=&'a ImageAdv> {
     ", [])?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::prelude::*;
+    use itertools::Itertools;
+
+    const IN_MEMORY: &str = ":memory:";
+
+    fn gen_random_image(counter: &mut u32) -> ImageAdv {
+        let mut rng = rand::rng();
+        let mut hash = [0u8; blake3::OUT_LEN];
+        rng.fill_bytes(&mut hash);
+        *counter += 1;
+        ImageAdv{
+            basic: ImageBasic {
+                path: format!("/path/{}.jpg", counter),
+                size: rng.random::<u32>() as u64,
+            },
+            checksum: Hash::from_bytes(hash),
+            date: chrono::Utc::now().naive_utc(),
+        }
+    }
+
+    fn gen_random_groups(enabled: Vec<bool>) -> Vec<Vec<ImageAdv>> {
+        let mut vecs: Vec<Vec<ImageAdv>> = Vec::new();
+        let mut rng = rand::rng();
+        let mut image_counter = 0;
+
+        for gen_images in enabled.into_iter() {
+            let mut vec: Vec<ImageAdv> = Vec::new();
+            if gen_images {
+                vec.extend((0..rng.random_range(1..10)).map(|_| gen_random_image(&mut image_counter)));
+            }
+            vecs.push(vec);
+        }
+
+        vecs
+    }
+
+    #[test]
+    fn test_create_table() {
+        let conn = create_conn(IN_MEMORY.as_ref(), false).unwrap();
+
+        let app_id: i64 = conn
+            .pragma_query_value(
+                None,
+                "application_id",
+                |row| row.get(0)
+            ).unwrap();
+        assert_eq!(
+            app_id,
+            APPLICATION_ID,
+            "create_conn did not set the application_id correctly"
+        );
+
+        let user_version: i64 = conn
+            .pragma_query_value( None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(user_version, USER_VERSION, "create_conn did not set the user_version correctly");
+    }
+
+    fn test_update_table(find_new: bool, find_common: bool, find_old: bool, table: TableType) {
+        let vecs: Vec<Vec<ImageAdv>> = gen_random_groups(vec![find_new, find_common, find_old]);
+
+        let conn = create_conn(IN_MEMORY.as_ref(), false).unwrap();
+
+        // Setup tables
+        populate_new_table(&conn, table, vecs[0].iter().chain(vecs[1].iter()).map(|i| &i.basic)).unwrap();
+        add_to_table(&conn, table, vecs[1].iter().chain(vecs[2].iter())).unwrap();
+
+        let actual_new = update_table_get_new(&conn, table).unwrap();
+
+        assert_eq!(
+            vecs[0].iter().map(|i| &i.basic).collect::<Vec<_>>(),
+            actual_new.iter().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_update_table_loop() {
+        for params in (0..4).map(|_| [false, true]).multi_cartesian_product() {
+            let [new, common, old, is_camera] = params.try_into().unwrap();
+            let table = if is_camera { TableType::Camera } else { TableType::Disk };
+            println!("new: {}, common: {}, old: {}, table: {:?}", new, common, old, table);
+            test_update_table(new, common, old, table);
+        }
+    }
+
+    fn test_archive_images(find_new: bool, find_common: bool, find_old: bool, set_archived: bool) {
+        let vecs: Vec<Vec<ImageAdv>> = gen_random_groups(vec![find_new, find_common, find_old]);
+
+        let conn = create_conn(IN_MEMORY.as_ref(), false).unwrap();
+
+        // Setup tables
+        add_to_table(&conn, TableType::Camera, vecs[0].iter().chain(vecs[1].iter())).unwrap();
+        add_to_table(&conn, TableType::Disk, vecs[1].iter().chain(vecs[2].iter())).unwrap();
+        if set_archived {
+            set_images_as_archived(&conn, vecs[1].iter()).unwrap();
+        }
+
+        let actual_common = get_images_to_archive(&conn).unwrap();
+
+        assert_eq!(
+            vecs[0].iter().collect::<Vec<_>>(),
+            actual_common.iter().collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_archive_images_loop() {
+        for params in (0..4).map(|_| [false, true]).multi_cartesian_product() {
+            let [new, common, old, set_archived] = params.try_into().unwrap();
+            println!("new: {}, common: {}, old: {}, set_archived: {}", new, common, old, set_archived);
+            test_archive_images(new, common, old, set_archived);
+        }
+    }
 }
