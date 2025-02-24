@@ -83,6 +83,7 @@ fn main() -> anyhow::Result<()> {
 
         set_images_as_archived(&trans, success.iter())?;
         trans.commit()?;
+        eprintln!("Archived {} images", success.len());
     }
 
     Ok(())

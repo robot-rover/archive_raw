@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use anyhow::Context;
 use log::debug;
 use blake3::Hash;
 use log::info;
@@ -30,7 +31,8 @@ impl TableType {
 // TODO: Function that validates paths / names match up
 
 pub fn create_conn(db_file: &Path, clean: bool) -> anyhow::Result<Connection> {
-    let conn= Connection::open(db_file)?;
+    let conn = Connection::open(db_file)
+        .context("Unable to open database file")?;
 
     let application_id: i64 = conn.pragma_query_value(
         None,
