@@ -3,9 +3,13 @@ mod db;
 mod images;
 
 use args::parse_args;
-use db::{add_to_table, get_images_to_archive, populate_new_table, set_images_as_archived, update_table_get_new, TableType::*};
+use db::{
+    add_to_table, get_images_to_archive, populate_new_table, set_images_as_archived,
+    update_table_get_new, TableType::*,
+};
 use images::{archive_image, load_images, ImageAdv, ImageBasic};
 use log::{info, warn, LevelFilter};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 fn main() -> anyhow::Result<()> {
     env_logger::builder()
@@ -22,8 +26,8 @@ fn main() -> anyhow::Result<()> {
     // Read file structure on disk, find rows that don't exist in in on_disk
     // An unknown file in the target is an error
     eprintln!("Scanning target at {}", args.target_dir.display());
-    let target_images = load_images::<ImageBasic>(&args.target_dir)
-        .collect::<Result<Vec<_>, _>>()?;
+    let target_images =
+        load_images::<ImageBasic>(&args.target_dir).collect::<Result<Vec<_>, _>>()?;
     info!("  Found {} target images", target_images.len());
 
     {
@@ -33,9 +37,11 @@ fn main() -> anyhow::Result<()> {
 
         // For those new rows, read their metadata by actually opening the files
         let new_on_disk_adv = new_on_disk
-            .into_iter()
+            .into_par_iter()
             .filter_map(|i| {
-                ImageAdv::from_basic(i).inspect_err(|err| warn!("{}", err)).ok()
+                ImageAdv::from_basic(i)
+                    .inspect_err(|err| warn!("{}", err))
+                    .ok()
             })
             .collect::<Vec<_>>();
 
@@ -58,9 +64,11 @@ fn main() -> anyhow::Result<()> {
 
         // For those new rows, read their metadata by actually opening the files
         let new_on_camera_adv = new_on_camera
-            .into_iter()
+            .into_par_iter()
             .filter_map(|i| {
-                ImageAdv::from_basic(i).inspect_err(|err| warn!("{}", err)).ok()
+                ImageAdv::from_basic(i)
+                    .inspect_err(|err| warn!("{}", err))
+                    .ok()
             })
             .collect::<Vec<_>>();
 
@@ -74,12 +82,15 @@ fn main() -> anyhow::Result<()> {
 
     {
         let trans = conn.transaction()?;
-        let success = images_to_archive.into_iter().filter_map(|image| {
-            archive_image(&image, &args.target_dir)
-                .inspect_err(|err| warn!("{}", err))
-                .map(|_| image)
-                .ok()
-        }).collect::<Vec<_>>();
+        let success = images_to_archive
+            .into_par_iter()
+            .filter_map(|image| {
+                archive_image(&image, &args.target_dir)
+                    .inspect_err(|err| warn!("{}", err))
+                    .map(|_| image)
+                    .ok()
+            })
+            .collect::<Vec<_>>();
 
         set_images_as_archived(&trans, success.iter())?;
         trans.commit()?;

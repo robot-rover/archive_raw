@@ -1,6 +1,6 @@
-use std::{ffi::OsStr, fs, io, path::Path};
 use anyhow::{anyhow, bail, Context};
 use blake3::Hash;
+use std::{ffi::OsStr, fs, path::Path};
 
 use chrono::NaiveDateTime;
 use rexiv2::Metadata;
@@ -18,7 +18,8 @@ pub struct ImageBasic {
 
 impl ImageExt for ImageBasic {
     fn from_entry(entry: &DirEntry) -> anyhow::Result<Self> {
-        let path = entry.path()
+        let path = entry
+            .path()
             .to_str()
             .ok_or_else(|| anyhow!("Path {} is not utf8", entry.path().display()))?
             .to_owned();
@@ -26,7 +27,6 @@ impl ImageExt for ImageBasic {
         let size = entry.metadata()?.len();
         Ok(ImageBasic { path, size })
     }
-
 }
 
 impl ImageBasic {
@@ -34,7 +34,6 @@ impl ImageBasic {
         AsRef::<Path>::as_ref(&self.path)
             .file_name()
             .and_then(OsStr::to_str)
-            .map(|s| s.as_ref())
             .expect("Convertion from str to path and back failed")
     }
 }
@@ -58,15 +57,20 @@ impl ImageAdv {
             bail!("No exif data found in {}", basic.path);
         }
 
-        let date_str = metadata.get_tag_string("Exif.Image.DateTime")
+        let date_str = metadata
+            .get_tag_string("Exif.Image.DateTime")
             .with_context(|| format!("No exif date found in {}", basic.path))?;
 
-        let date =  NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
+        let date = NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
             .with_context(|| format!("Unable to parse exif date in {}", basic.path))?;
 
         let checksum = blake3::hash(&content);
 
-        Ok(ImageAdv { basic, checksum, date })
+        Ok(ImageAdv {
+            basic,
+            checksum,
+            date,
+        })
     }
 }
 
@@ -79,17 +83,22 @@ impl ImageExt for ImageAdv {
 const IGNORE_EXT: &[&str] = &["xmp", "pp3"];
 
 pub fn load_images<I: ImageExt>(dir: &Path) -> impl Iterator<Item = anyhow::Result<I>> {
-    WalkDir::new(dir).into_iter().map(|res| match res {
-        Ok(entry) if entry.file_type().is_file() => {
-            let ext = AsRef::<Path>::as_ref(entry.file_name()).extension().and_then(OsStr::to_str);
-            match ext {
-                Some(ext) if IGNORE_EXT.contains(&ext) => Ok(None),
-                _ => Ok(Some(I::from_entry(&entry)?)),
+    WalkDir::new(dir)
+        .into_iter()
+        .map(|res| match res {
+            Ok(entry) if entry.file_type().is_file() => {
+                let ext = AsRef::<Path>::as_ref(entry.file_name())
+                    .extension()
+                    .and_then(OsStr::to_str);
+                match ext {
+                    Some(ext) if IGNORE_EXT.contains(&ext) => Ok(None),
+                    _ => Ok(Some(I::from_entry(&entry)?)),
+                }
             }
-        },
-        Ok(_dir_entry) => Ok(None),
-        Err(err) => Err(err.into()),
-    }).filter_map(Result::transpose)
+            Ok(_dir_entry) => Ok(None),
+            Err(err) => Err(err.into()),
+        })
+        .filter_map(Result::transpose)
 }
 
 pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()> {
@@ -103,11 +112,17 @@ pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()>
         bail!("File {} already exists", target.display());
     }
 
-    fs::copy(&image.basic.path, &target)
-        .with_context(|| format!("Failed to copy to {} to {}", &image.basic.path, target.display()))?;
+    fs::copy(&image.basic.path, &target).with_context(|| {
+        format!(
+            "Failed to copy to {} to {}",
+            &image.basic.path,
+            target.display()
+        )
+    })?;
 
-    let new_hash = blake3::hash(&fs::read(&target)
-        .with_context(|| format!("Failed to re-read {}", target.display()))?);
+    let new_hash = blake3::hash(
+        &fs::read(&target).with_context(|| format!("Failed to re-read {}", target.display()))?,
+    );
 
     if new_hash != image.checksum {
         fs::remove_file(&target)?;

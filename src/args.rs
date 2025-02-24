@@ -1,7 +1,7 @@
-use std::{env, ffi::OsStr, path::PathBuf};
 use anyhow::Context;
 use dotenvy::dotenv;
 use log::warn;
+use std::{env, ffi::OsStr, path::PathBuf};
 
 const HELP_STRING: &str = "\
 rawdb - A simple image archiver
@@ -31,18 +31,21 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
     }
 
     let target_dir = pargs
-        .opt_value_from_os_str("--target", parse_path).unwrap()
+        .opt_value_from_os_str("--target", parse_path)
+        .unwrap()
         .or_else(|| env::var_os("RAWDB_TARGET").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("--target or RAWDB_TARGET must be set"))?;
 
     let database_path = pargs
-        .opt_value_from_os_str("--db", parse_path).unwrap()
+        .opt_value_from_os_str("--db", parse_path)
+        .unwrap()
         .or_else(|| env::var_os("RAWDB_DB").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("--db or RAWDB_DB must be set"))?;
 
     let clean = pargs.contains(["-c", "--clean"]);
 
-    let source_dir = pargs.free_from_str()
+    let source_dir = pargs
+        .free_from_str()
         .context("Must pass source_dir as an argument")?;
 
     let remaining = pargs.finish();
@@ -50,6 +53,10 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
         warn!("Unrecognized arguments: {:?}", remaining);
     }
 
-    Ok(AppArgs { source_dir, target_dir, database_path, clean })
+    Ok(AppArgs {
+        source_dir,
+        target_dir,
+        database_path,
+        clean,
+    })
 }
-
