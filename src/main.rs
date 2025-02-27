@@ -50,9 +50,13 @@ fn main() -> anyhow::Result<()> {
         trans.commit()?;
     };
 
+    let Some(source_dir) = args.source_dir else {
+        return Ok(());
+    };
+
     // Read the file structure on the camera, find the rows that don't exist in on_camera
-    eprintln!("Finding images in {:?}", args.source_dir);
-    let images = load_images::<ImageBasic>(&args.source_dir)
+    eprintln!("Finding images in {:?}", source_dir);
+    let images = load_images::<ImageBasic>(&source_dir)
         .filter_map(|res| res.inspect_err(|err| warn!("{}", err)).ok())
         .collect::<Vec<_>>();
     info!("  Found {} images", images.len());

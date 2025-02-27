@@ -85,7 +85,8 @@ where
     I: IntoIterator<Item = &'a ImageBasic>,
 {
     let name = table.to_sql(true);
-    conn.execute_batch(&format!("
+    conn.execute_batch(&format!(
+        "
         CREATE TEMP TABLE {name} (
           name     TEXT NOT NULL,
           path     TEXT NOT NULL,
@@ -94,7 +95,8 @@ where
 
         CREATE UNIQUE INDEX {name}_path
         ON {name}(path);
-    "),)?;
+    "
+    ))?;
 
     let mut stmt = conn.prepare(&format!(
         "INSERT INTO {name} (name, path, size) VALUES (?1, ?2, ?3)"

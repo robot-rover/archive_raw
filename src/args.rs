@@ -1,4 +1,3 @@
-use anyhow::Context;
 use dotenvy::dotenv;
 use log::warn;
 use std::{env, ffi::OsStr, path::PathBuf};
@@ -11,7 +10,7 @@ usage: rawdb [-options] [source_dir]
 ";
 
 pub struct AppArgs {
-    pub source_dir: PathBuf,
+    pub source_dir: Option<PathBuf>,
     pub target_dir: PathBuf,
     pub database_path: PathBuf,
     pub clean: bool,
@@ -44,9 +43,7 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
 
     let clean = pargs.contains(["-c", "--clean"]);
 
-    let source_dir = pargs
-        .free_from_str()
-        .context("Must pass source_dir as an argument")?;
+    let source_dir = pargs.opt_free_from_os_str(parse_path).unwrap();
 
     let remaining = pargs.finish();
     if !remaining.is_empty() {
