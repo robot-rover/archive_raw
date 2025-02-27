@@ -5,8 +5,9 @@ use std::{env, ffi::OsStr, path::PathBuf};
 const HELP_STRING: &str = "\
 rawdb - A simple image archiver
 usage: rawdb [-options] [source_dir]
-    [--target <target_dir>]
-    [--db <database_file>]
+    [--target <target_dir>] # The directory place archived images
+    [--db <database_file>]  # The location to store the image database
+    [-c | --clean]          # Clear the image database
 ";
 
 pub struct AppArgs {

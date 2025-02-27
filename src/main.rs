@@ -1,6 +1,7 @@
 mod args;
 mod db;
 mod images;
+mod thresh_acc;
 
 use args::parse_args;
 use db::{
@@ -8,8 +9,14 @@ use db::{
     update_table_get_new, TableType::*,
 };
 use images::{archive_image, load_images, ImageAdv, ImageBasic};
+use indicatif::{ParallelProgressIterator, ProgressStyle};
 use log::{info, warn, LevelFilter};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+
+fn get_prog_style() -> ProgressStyle {
+    ProgressStyle::with_template("{msg} [{elapsed} / {duration}] {wide_bar} {pos} / {len}")
+        .expect("Illegal Progress Bar Template")
+}
 
 fn main() -> anyhow::Result<()> {
     env_logger::builder()
@@ -38,6 +45,8 @@ fn main() -> anyhow::Result<()> {
         // For those new rows, read their metadata by actually opening the files
         let new_on_disk_adv = new_on_disk
             .into_par_iter()
+            .progress_with_style(get_prog_style())
+            .with_message("Indexing new disk images")
             .filter_map(|i| {
                 ImageAdv::from_basic(i)
                     .inspect_err(|err| warn!("{}", err))
@@ -69,6 +78,8 @@ fn main() -> anyhow::Result<()> {
         // For those new rows, read their metadata by actually opening the files
         let new_on_camera_adv = new_on_camera
             .into_par_iter()
+            .progress_with_style(get_prog_style())
+            .with_message("Indexing new camera images")
             .filter_map(|i| {
                 ImageAdv::from_basic(i)
                     .inspect_err(|err| warn!("{}", err))
@@ -88,6 +99,8 @@ fn main() -> anyhow::Result<()> {
         let trans = conn.transaction()?;
         let success = images_to_archive
             .into_par_iter()
+            .progress_with_style(get_prog_style())
+            .with_message("Archiving images")
             .filter_map(|image| {
                 archive_image(&image, &args.target_dir)
                     .inspect_err(|err| warn!("{}", err))
