@@ -18,6 +18,13 @@ pub enum TableType {
 }
 
 impl TableType {
+    pub fn label(&self) -> &str {
+        match self {
+            TableType::Disk => "disk",
+            TableType::Camera => "camera",
+        }
+    }
+
     fn to_sql(self, is_new: bool) -> &'static str {
         match (self, is_new) {
             (TableType::Disk, false) => "on_disk",
@@ -178,7 +185,7 @@ pub fn update_table_get_new(
 
 pub fn add_to_table<'a, I>(conn: &Connection, table: TableType, images: I) -> anyhow::Result<()>
 where
-    I: IntoIterator<Item = &'a ImageAdv>,
+    I: IntoIterator<Item = ImageAdv>,
 {
     let name = table.to_sql(false);
     let mut stmt = conn.prepare(&format!(
@@ -344,7 +351,12 @@ mod tests {
             vecs[0].iter().chain(vecs[1].iter()).map(|i| &i.basic),
         )
         .unwrap();
-        add_to_table(&conn, table, vecs[1].iter().chain(vecs[2].iter())).unwrap();
+        add_to_table(
+            &conn,
+            table,
+            vecs[1].iter().cloned().chain(vecs[2].iter().cloned()),
+        )
+        .unwrap();
 
         let actual_new = update_table_get_new(&conn, table).unwrap();
 
@@ -380,10 +392,15 @@ mod tests {
         add_to_table(
             &conn,
             TableType::Camera,
-            vecs[0].iter().chain(vecs[1].iter()),
+            vecs[0].iter().cloned().chain(vecs[1].iter().cloned()),
         )
         .unwrap();
-        add_to_table(&conn, TableType::Disk, vecs[1].iter().chain(vecs[2].iter())).unwrap();
+        add_to_table(
+            &conn,
+            TableType::Disk,
+            vecs[1].iter().cloned().chain(vecs[2].iter().cloned()),
+        )
+        .unwrap();
         if set_archived {
             set_images_as_archived(&conn, vecs[1].iter()).unwrap();
         }

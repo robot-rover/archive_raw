@@ -47,10 +47,7 @@ pub struct ImageAdv {
 
 impl ImageAdv {
     pub fn from_basic(basic: ImageBasic) -> anyhow::Result<Self> {
-        let content = fs::read(&basic.path)
-            .with_context(|| format!("Unable to read content of {}", basic.path))?;
-
-        let metadata = Metadata::new_from_buffer(&content)
+        let metadata = Metadata::new_from_path(&basic.path)
             .with_context(|| format!("Unrecognized image format in {}", basic.path))?;
 
         if !metadata.has_exif() {
@@ -64,7 +61,8 @@ impl ImageAdv {
         let date = NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
             .with_context(|| format!("Unable to parse exif date in {}", basic.path))?;
 
-        let checksum = blake3::hash(&content);
+        let file = fs::File::open(&basic.path)?;
+        let checksum = blake3::Hasher::new().update_reader(file)?.finalize();
 
         Ok(ImageAdv {
             basic,
