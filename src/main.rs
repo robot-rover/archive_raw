@@ -12,7 +12,7 @@ use db::{
 };
 use images::{archive_image, load_images, ImageAdv, ImageBasic};
 use indicatif::{
-    MultiProgress, ParallelProgressIterator, ProgressBar, ProgressIterator, ProgressStyle,
+    MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle,
 };
 use indicatif_log_bridge::LogWrapper;
 use log::{error, info, warn, LevelFilter};
@@ -48,7 +48,7 @@ fn find_new_files(
         .progress_with(pb)
         .with_message(format!("Indexing new {} images", table.label()))
         .filter_map(|i| {
-            ImageAdv::from_basic(i)
+            ImageAdv::from_basic(i, dir)
                 .inspect_err(|err| warn!("{}", err))
                 .ok()
         })
@@ -103,7 +103,12 @@ fn main() -> anyhow::Result<()> {
 
     let images_to_archive = get_images_to_archive(&conn)?;
 
-    {
+    if args.dry {
+        println!("Images to archive:");
+        for image in &images_to_archive {
+            println!("  {}", image.basic.path);
+        }
+    } else {
         let trans = conn.transaction()?;
         let success = images_to_archive
             .into_par_iter()

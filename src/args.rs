@@ -1,4 +1,3 @@
-use dotenvy::dotenv;
 use log::warn;
 use std::{env, ffi::OsStr, path::PathBuf};
 
@@ -8,6 +7,7 @@ usage: rawdb [-options] [source_dir]
     [--target <target_dir>] # The directory place archived images
     [--db <database_file>]  # The location to store the image database
     [-c | --clean]          # Clear the image database
+    [-n | --dry-run]        # Index but don't archive
 ";
 
 pub struct AppArgs {
@@ -15,6 +15,7 @@ pub struct AppArgs {
     pub target_dir: PathBuf,
     pub database_path: PathBuf,
     pub clean: bool,
+    pub dry: bool,
 }
 
 fn parse_path(os_str: &OsStr) -> Result<PathBuf, &'static str> {
@@ -22,7 +23,6 @@ fn parse_path(os_str: &OsStr) -> Result<PathBuf, &'static str> {
 }
 
 pub fn parse_args() -> anyhow::Result<AppArgs> {
-    dotenv()?;
     let mut pargs = pico_args::Arguments::from_env();
 
     if pargs.contains(["-h", "--help"]) {
@@ -43,6 +43,7 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
         .ok_or_else(|| anyhow::anyhow!("--db or RAWDB_DB must be set"))?;
 
     let clean = pargs.contains(["-c", "--clean"]);
+    let dry = pargs.contains(["-d", "--dry-run"]);
 
     let source_dir = pargs.opt_free_from_os_str(parse_path).unwrap();
 
@@ -56,5 +57,6 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
         target_dir,
         database_path,
         clean,
+        dry,
     })
 }

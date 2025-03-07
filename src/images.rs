@@ -7,7 +7,7 @@ use rexiv2::Metadata;
 use walkdir::{DirEntry, WalkDir};
 
 pub trait ImageExt: Sized {
-    fn from_entry(entry: &DirEntry) -> anyhow::Result<Self>;
+    fn from_entry(entry: &DirEntry, base: &Path) -> anyhow::Result<Self>;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -17,9 +17,11 @@ pub struct ImageBasic {
 }
 
 impl ImageExt for ImageBasic {
-    fn from_entry(entry: &DirEntry) -> anyhow::Result<Self> {
+    fn from_entry(entry: &DirEntry, base: &Path) -> anyhow::Result<Self> {
         let path = entry
             .path()
+            .strip_prefix(base)
+            .context("Image path is not relative to base")?
             .to_str()
             .ok_or_else(|| anyhow!("Path {} is not utf8", entry.path().display()))?
             .to_owned();
@@ -46,22 +48,23 @@ pub struct ImageAdv {
 }
 
 impl ImageAdv {
-    pub fn from_basic(basic: ImageBasic) -> anyhow::Result<Self> {
-        let metadata = Metadata::new_from_path(&basic.path)
-            .with_context(|| format!("Unrecognized image format in {}", basic.path))?;
+    pub fn from_basic(basic: ImageBasic, base: &Path) -> anyhow::Result<Self> {
+        let abs_path = base.join(&basic.path);
+        let metadata = Metadata::new_from_path(&abs_path)
+            .with_context(|| format!("Unrecognized image format in {}", abs_path.display()))?;
 
         if !metadata.has_exif() {
-            bail!("No exif data found in {}", basic.path);
+            bail!("No exif data found in {}", abs_path.display());
         }
 
         let date_str = metadata
             .get_tag_string("Exif.Image.DateTime")
-            .with_context(|| format!("No exif date found in {}", basic.path))?;
+            .with_context(|| format!("No exif date found in {}", abs_path.display()))?;
 
         let date = NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
-            .with_context(|| format!("Unable to parse exif date in {}", basic.path))?;
+            .with_context(|| format!("Unable to parse exif date in {}", abs_path.display()))?;
 
-        let file = fs::File::open(&basic.path)?;
+        let file = fs::File::open(&abs_path)?;
         let checksum = blake3::Hasher::new().update_reader(file)?.finalize();
 
         Ok(ImageAdv {
@@ -73,14 +76,14 @@ impl ImageAdv {
 }
 
 impl ImageExt for ImageAdv {
-    fn from_entry(entry: &DirEntry) -> anyhow::Result<Self> {
-        ImageAdv::from_basic(ImageBasic::from_entry(entry)?)
+    fn from_entry(entry: &DirEntry, base: &Path) -> anyhow::Result<Self> {
+        ImageAdv::from_basic(ImageBasic::from_entry(entry, base)?, base)
     }
 }
 
 const IGNORE_EXT: &[&str] = &["xmp", "pp3"];
 
-pub fn load_images<I: ImageExt>(dir: &Path) -> impl Iterator<Item = anyhow::Result<I>> {
+pub fn load_images<'a, I: ImageExt>(dir: &'a Path) -> impl Iterator<Item = anyhow::Result<I>> + use<'a, I> {
     WalkDir::new(dir)
         .into_iter()
         .map(|res| match res {
@@ -90,7 +93,7 @@ pub fn load_images<I: ImageExt>(dir: &Path) -> impl Iterator<Item = anyhow::Resu
                     .and_then(OsStr::to_str);
                 match ext {
                     Some(ext) if IGNORE_EXT.contains(&ext) => Ok(None),
-                    _ => Ok(Some(I::from_entry(&entry)?)),
+                    _ => Ok(Some(I::from_entry(&entry, dir)?)),
                 }
             }
             Ok(_dir_entry) => Ok(None),
@@ -110,10 +113,11 @@ pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()>
         bail!("File {} already exists", target.display());
     }
 
-    fs::copy(&image.basic.path, &target).with_context(|| {
+    let abs_path = target_base.join(&image.basic.path);
+    fs::copy(&abs_path, &target).with_context(|| {
         format!(
             "Failed to copy to {} to {}",
-            &image.basic.path,
+            abs_path.display(),
             target.display()
         )
     })?;
