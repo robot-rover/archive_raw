@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail, Context};
-use blake3::Hash;
 use std::{ffi::OsStr, fs, path::Path};
 
 use chrono::NaiveDateTime;
@@ -43,7 +42,6 @@ impl ImageBasic {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageAdv {
     pub basic: ImageBasic,
-    pub checksum: Hash,
     pub date: NaiveDateTime,
 }
 
@@ -64,12 +62,8 @@ impl ImageAdv {
         let date = NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
             .with_context(|| format!("Unable to parse exif date in {}", abs_path.display()))?;
 
-        let file = fs::File::open(&abs_path)?;
-        let checksum = blake3::Hasher::new().update_reader(file)?.finalize();
-
         Ok(ImageAdv {
             basic,
-            checksum,
             date,
         })
     }
@@ -122,13 +116,11 @@ pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()>
         )
     })?;
 
-    let new_hash = blake3::hash(
-        &fs::read(&target).with_context(|| format!("Failed to re-read {}", target.display()))?,
-    );
+    let new_len = fs::metadata(&target)?.len();
 
-    if new_hash != image.checksum {
+    if new_len != image.basic.size {
         fs::remove_file(&target)?;
-        bail!("Checksum mismatch for {}", target.display());
+        bail!("Length mismatch for {}", target.display());
     }
 
     Ok(())

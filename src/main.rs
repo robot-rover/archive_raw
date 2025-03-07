@@ -37,7 +37,13 @@ fn find_new_files(
     info!("  Found {} {} images", target_images.len(), label);
 
     let trans = conn.transaction()?;
-    populate_new_table(&trans, table, &target_images)?;
+    let duplicates = populate_new_table(&trans, table, &target_images)?;
+    for dup in duplicates {
+        error!("Possible duplicate file detected: {}", dup.name);
+        for path in dup.paths {
+            error!("  {}", path);
+        }
+    }
     let new_on = update_table_get_new(&trans, table)?;
 
     // For those new rows, read their metadata by actually opening the files
@@ -60,15 +66,13 @@ fn find_new_files(
     Ok(())
 }
 
-fn find_new_files_multi(
-    conn: &mut Connection,
-    table: TableType,
-    dir: &Path,
-    label: &str,
+fn wrap_multi<F, T>(
     multi: &MultiProgress,
-) -> anyhow::Result<()> {
+    inner: F
+) -> T
+where F: FnOnce(ProgressBar) -> T {
     let pb = multi.add(ProgressBar::no_length().with_style(get_prog_style()));
-    let res = find_new_files(conn, table, dir, label, pb.clone());
+    let res = inner(pb.clone());
     pb.finish();
     multi.remove(&pb);
     res
@@ -76,7 +80,7 @@ fn find_new_files_multi(
 
 fn main() -> anyhow::Result<()> {
     let logger_inner = env_logger::builder()
-        .filter_level(LevelFilter::Warn)
+        .filter_level(LevelFilter::Info)
         .format_timestamp(None)
         .format_target(false)
         .parse_env("RAWDB_LOG")
@@ -92,13 +96,13 @@ fn main() -> anyhow::Result<()> {
     eprintln!("Loading database at {}", args.database_path.display());
     let mut conn = db::create_conn(&args.database_path, args.clean)?;
 
-    find_new_files_multi(&mut conn, Disk, &args.target_dir, "target", &multi)?;
+    wrap_multi(&multi, |pb| find_new_files(&mut conn, Disk, &args.target_dir, "target", pb))?;
 
     let Some(source_dir) = args.source_dir else {
         return Ok(());
     };
 
-    find_new_files_multi(&mut conn, Camera, &source_dir, "source", &multi)?;
+    wrap_multi(&multi, |pb| find_new_files(&mut conn, Camera, &source_dir, "source", pb))?;
 
     let images_to_archive = get_images_to_archive(&conn)?;
 
@@ -107,11 +111,16 @@ fn main() -> anyhow::Result<()> {
         for image in &images_to_archive {
             println!("  {}", image.basic.path);
         }
-    } else {
+
+        return Ok(())
+    }
+    wrap_multi(&multi, |pb| {
+        pb.set_length(images_to_archive.len() as u64);
+
         let trans = conn.transaction()?;
         let success = images_to_archive
             .into_iter()
-            .progress_with_style(get_prog_style())
+            .progress_with(pb)
             .with_message("Archiving images")
             .filter_map(|image| {
                 archive_image(&image, &args.target_dir)
@@ -124,7 +133,7 @@ fn main() -> anyhow::Result<()> {
         set_images_as_archived(&trans, success.iter())?;
         trans.commit()?;
         eprintln!("Archived {} images", success.len());
-    }
 
-    Ok(())
+        Ok(())
+    })
 }

@@ -1,9 +1,11 @@
 use std::path::Path;
 
+use anyhow::bail;
 use anyhow::Context;
-use blake3::Hash;
 use log::debug;
+use log::error;
 use log::info;
+use log::warn;
 use rusqlite::{config::DbConfig, params, Connection};
 
 use crate::images::{ImageAdv, ImageBasic};
@@ -83,11 +85,16 @@ fn update_schema(conn: &Connection, current_user_version: i64) -> anyhow::Result
     Ok(())
 }
 
+pub struct DuplicateImage {
+    pub name: String,
+    pub paths: Vec<String>,
+}
+
 pub fn populate_new_table<'a, I>(
     conn: &Connection,
     table: TableType,
     images: I,
-) -> anyhow::Result<()>
+) -> anyhow::Result<Vec<DuplicateImage>>
 where
     I: IntoIterator<Item = &'a ImageBasic>,
 {
@@ -102,6 +109,9 @@ where
 
         CREATE UNIQUE INDEX {name}_path
         ON {name}(path);
+
+        CREATE INDEX {name}_uniq
+        ON {name}(name, size);
     "
     ))?;
 
@@ -113,7 +123,48 @@ where
         stmt.execute(params![&image.get_name(), &image.path, &image.size])?;
     }
 
-    Ok(())
+    let duplicates = conn.prepare(&format!("
+        SELECT name, size
+        FROM {name}
+        GROUP BY name, size
+        HAVING COUNT(*) > 1
+    "))?
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+    })?.collect::<Result<Vec<(String, i64)>, _>>()?;
+
+    if duplicates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut dup_stmt = conn.prepare(&format!(
+        "
+        SELECT path
+        FROM {name}
+        WHERE name = ?1 AND size = ?2
+    "))?;
+
+    let res = duplicates.into_iter().map(|(name, size)| {
+        let paths = dup_stmt.query_and_then(params![name, size], |row| {
+            row.get(0)
+        })?.collect::<Result<Vec<_>, _>>()?;
+
+        Ok(DuplicateImage {
+            name,
+            paths,
+        })
+    }).collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+    conn.execute(&format!("
+        DELETE FROM {name}
+        where rowid not in (
+            SELECT rowid
+            FROM {name}
+            GROUP BY name, size
+        )
+    "), [])?;
+
+    Ok(res)
 }
 
 pub fn update_table_get_new(
@@ -145,15 +196,7 @@ pub fn update_table_get_new(
     );
 
     let keep_count = conn.query_row(
-        &format!(
-            "
-        SELECT COUNT(*)
-        FROM {name}
-        INNER JOIN {new_name}
-        ON {name}.path = {new_name}.path
-            AND {name}.size = {new_name}.size
-    "
-        ),
+        &format!("SELECT COUNT(*) FROM {name}"),
         [],
         |row| row.get::<_, u64>(0),
     )?;
@@ -190,17 +233,17 @@ where
     let name = table.to_sql(false);
     let mut stmt = conn.prepare(&format!(
         "
-        INSERT INTO {name} (name, path, size, checksum, date)
-        VALUES (?1, ?2, ?3, ?4, ?5)
+        INSERT INTO {name} (name, path, size, date)
+        VALUES (?1, ?2, ?3, ?4)
     "
     ))?;
 
     for image in images.into_iter() {
+        debug!("Adding {} to {}", image.basic.path, table.to_sql(false));
         stmt.execute(params![
             &image.basic.get_name(),
             &image.basic.path,
             &image.basic.size,
-            &image.checksum.as_bytes(),
             &image.date
         ])?;
     }
@@ -211,12 +254,35 @@ where
 pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>> {
     let mut stmt = conn.prepare(
         "
-        SELECT on_camera.path, on_camera.size, on_camera.checksum, on_camera.date
+        SELECT on_camera.path, on_camera.size, on_disk.path, on_disk.size
+        FROM on_camera
+        INNER JOIN on_disk
+        ON on_disk.name = on_camera.name
+            AND on_disk.date = on_camera.date
+            AND on_disk.size != on_camera.size
+    ",
+    )?;
+
+    let mismatch = stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?.collect::<Result<Vec<(String, i64, String, i64)>, _>>()?;
+
+    if !mismatch.is_empty() {
+        for (camera_path, camera_size, disk_path, disk_size) in mismatch {
+            error!(
+            "Image has size mismatch: Camera: {}={} Disk: {}={}",
+            camera_path, camera_size, disk_path, disk_size
+            );
+        }
+        bail!("Images with size mismatch detected");
+    }
+
+    let mut stmt = conn.prepare(
+        "
+        SELECT on_camera.path, on_camera.size, on_camera.date
         FROM on_camera
         LEFT JOIN on_disk
         ON on_disk.name = on_camera.name
-            AND on_disk.size = on_camera.size
-            AND on_disk.checksum = on_camera.checksum
             AND on_disk.date = on_camera.date
         WHERE on_disk.name IS NULL
             AND on_camera.saved = 0
@@ -230,8 +296,7 @@ pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>>
                     path: row.get(0)?,
                     size: row.get(1)?,
                 },
-                checksum: Hash::from_bytes(row.get::<_, [u8; blake3::OUT_LEN]>(2)?),
-                date: row.get(3)?,
+                date: row.get(2)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -287,15 +352,12 @@ mod tests {
 
     fn gen_random_image(counter: &mut u32) -> ImageAdv {
         let mut rng = rand::rng();
-        let mut hash = [0u8; blake3::OUT_LEN];
-        rng.fill_bytes(&mut hash);
         *counter += 1;
         ImageAdv {
             basic: ImageBasic {
                 path: format!("/path/{}.jpg", counter),
                 size: rng.random::<u32>() as u64,
             },
-            checksum: Hash::from_bytes(hash),
             date: chrono::Utc::now().naive_utc(),
         }
     }
