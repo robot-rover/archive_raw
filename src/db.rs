@@ -5,7 +5,6 @@ use anyhow::Context;
 use log::debug;
 use log::error;
 use log::info;
-use log::warn;
 use rusqlite::{config::DbConfig, params, Connection};
 
 use crate::images::{ImageAdv, ImageBasic};
@@ -126,15 +125,17 @@ where
         stmt.execute(params![&image.get_name(), &image.path, &image.size])?;
     }
 
-    let duplicates = conn.prepare(&format!("
+    let duplicates = conn
+        .prepare(&format!(
+            "
         SELECT name, size
         FROM {name}
         GROUP BY name, size
         HAVING COUNT(*) > 1
-    "))?
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-    })?.collect::<Result<Vec<(String, i64)>, _>>()?;
+    "
+        ))?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<(String, i64)>, _>>()?;
 
     if duplicates.is_empty() {
         return Ok(Vec::new());
@@ -145,27 +146,33 @@ where
         SELECT path
         FROM {name}
         WHERE name = ?1 AND size = ?2
-    "))?;
+    "
+    ))?;
 
-    let res = duplicates.into_iter().map(|(name, size)| {
-        let paths = dup_stmt.query_and_then(params![name, size], |row| {
-            row.get(0)
-        })?.collect::<Result<Vec<_>, _>>()?;
+    let res = duplicates
+        .into_iter()
+        .map(|(name, size)| {
+            let paths = dup_stmt
+                .query_and_then(params![name, size], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(DuplicateImage {
-            name,
-            paths,
+            Ok(DuplicateImage { name, paths })
         })
-    }).collect::<Result<Vec<_>, anyhow::Error>>()?;
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
-    conn.execute(&format!("
+    conn.execute(
+        &format!(
+            "
         DELETE FROM {name}
         where rowid not in (
             SELECT rowid
             FROM {name}
             GROUP BY name, size
         )
-    "), [])?;
+    "
+        ),
+        [],
+    )?;
 
     Ok(res)
 }
@@ -198,11 +205,9 @@ pub fn update_table_get_new(
         delete_count
     );
 
-    let keep_count = conn.query_row(
-        &format!("SELECT COUNT(*) FROM {name}"),
-        [],
-        |row| row.get::<_, u64>(0),
-    )?;
+    let keep_count = conn.query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |row| {
+        row.get::<_, u64>(0)
+    })?;
     info!("{name} - Keeping {} existing image entries", keep_count);
 
     let mut stmt = conn.prepare(&format!(
@@ -266,15 +271,17 @@ pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>>
     ",
     )?;
 
-    let mismatch = stmt.query_map([], |row| {
-        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-    })?.collect::<Result<Vec<(String, i64, String, i64)>, _>>()?;
+    let mismatch = stmt
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?
+        .collect::<Result<Vec<(String, i64, String, i64)>, _>>()?;
 
     if !mismatch.is_empty() {
         for (camera_path, camera_size, disk_path, disk_size) in mismatch {
             error!(
-            "Image has size mismatch: Camera: {}={} Disk: {}={}",
-            camera_path, camera_size, disk_path, disk_size
+                "Image has size mismatch: Camera: {}={} Disk: {}={}",
+                camera_path, camera_size, disk_path, disk_size
             );
         }
         bail!("Images with size mismatch detected");
@@ -414,6 +421,7 @@ mod tests {
             &conn,
             table,
             vecs[0].iter().chain(vecs[1].iter()).map(|i| &i.basic),
+            false,
         )
         .unwrap();
         add_to_table(

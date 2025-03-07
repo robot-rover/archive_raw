@@ -62,10 +62,7 @@ impl ImageAdv {
         let date = NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
             .with_context(|| format!("Unable to parse exif date in {}", abs_path.display()))?;
 
-        Ok(ImageAdv {
-            basic,
-            date,
-        })
+        Ok(ImageAdv { basic, date })
     }
 }
 
@@ -81,7 +78,9 @@ impl ImageExt for ImageAdv {
 // txt: Text file
 const IGNORE_EXT: &[&str] = &["xmp", "pp3", "pto"];
 
-pub fn load_images<'a, I: ImageExt>(dir: &'a Path) -> impl Iterator<Item = anyhow::Result<I>> + use<'a, I> {
+pub fn load_images<'a, I: ImageExt>(
+    dir: &'a Path,
+) -> impl Iterator<Item = anyhow::Result<I>> + use<'a, I> {
     WalkDir::new(dir)
         .into_iter()
         .map(|res| match res {
@@ -100,7 +99,11 @@ pub fn load_images<'a, I: ImageExt>(dir: &'a Path) -> impl Iterator<Item = anyho
         .filter_map(Result::transpose)
 }
 
-pub fn archive_image(image: &ImageAdv, source_base: &Path, target_base: &Path) -> anyhow::Result<()> {
+pub fn archive_image(
+    image: &ImageAdv,
+    source_base: &Path,
+    target_base: &Path,
+) -> anyhow::Result<()> {
     let mut target = target_base.join(image.date.format("%Y-%m-%d").to_string());
     fs::create_dir_all(&target)
         .with_context(|| format!("Failed to create directory {}", target.display()))?;

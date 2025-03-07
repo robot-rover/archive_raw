@@ -11,9 +11,7 @@ use db::{
     TableType::{self, *},
 };
 use images::{archive_image, load_images, ImageAdv, ImageBasic};
-use indicatif::{
-    MultiProgress, ProgressBar, ProgressIterator, ProgressStyle
-};
+use indicatif::{MultiProgress, ProgressBar, ProgressIterator, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use log::{error, info, warn, LevelFilter};
 use rusqlite::Connection;
@@ -67,11 +65,10 @@ fn find_new_files(
     Ok(())
 }
 
-fn wrap_multi<F, T>(
-    multi: &MultiProgress,
-    inner: F
-) -> T
-where F: FnOnce(ProgressBar) -> T {
+fn wrap_multi<F, T>(multi: &MultiProgress, inner: F) -> T
+where
+    F: FnOnce(ProgressBar) -> T,
+{
     let pb = multi.add(ProgressBar::no_length().with_style(get_prog_style()));
     let res = inner(pb.clone());
     pb.finish();
@@ -99,16 +96,20 @@ fn main() -> anyhow::Result<()> {
 
     if args.clean {
         eprintln!("Database cleaned, exiting...");
-        return Ok(())
+        return Ok(());
     }
 
-    wrap_multi(&multi, |pb| find_new_files(&mut conn, Disk, &args.target_dir, "target", pb, args.leave))?;
+    wrap_multi(&multi, |pb| {
+        find_new_files(&mut conn, Disk, &args.target_dir, "target", pb, args.leave)
+    })?;
 
     let Some(source_dir) = args.source_dir else {
         return Ok(());
     };
 
-    wrap_multi(&multi, |pb| find_new_files(&mut conn, Camera, &source_dir, "source", pb, args.leave))?;
+    wrap_multi(&multi, |pb| {
+        find_new_files(&mut conn, Camera, &source_dir, "source", pb, args.leave)
+    })?;
 
     let images_to_archive = get_images_to_archive(&conn)?;
 
@@ -118,7 +119,7 @@ fn main() -> anyhow::Result<()> {
             println!("  {}", image.basic.path);
         }
 
-        return Ok(())
+        return Ok(());
     }
     wrap_multi(&multi, |pb| {
         pb.set_length(images_to_archive.len() as u64);
