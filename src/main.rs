@@ -96,6 +96,11 @@ fn main() -> anyhow::Result<()> {
     eprintln!("Loading database at {}", args.database_path.display());
     let mut conn = db::create_conn(&args.database_path, args.clean)?;
 
+    if args.clean {
+        eprintln!("Database cleaned, exiting...");
+        return Ok(())
+    }
+
     wrap_multi(&multi, |pb| find_new_files(&mut conn, Disk, &args.target_dir, "target", pb))?;
 
     let Some(source_dir) = args.source_dir else {
@@ -123,7 +128,7 @@ fn main() -> anyhow::Result<()> {
             .progress_with(pb)
             .with_message("Archiving images")
             .filter_map(|image| {
-                archive_image(&image, &args.target_dir)
+                archive_image(&image, &source_dir, &args.target_dir)
                     .inspect_err(|err| error!("{}", err))
                     .map(|_| image)
                     .ok()

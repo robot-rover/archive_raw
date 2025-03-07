@@ -96,7 +96,7 @@ pub fn load_images<'a, I: ImageExt>(dir: &'a Path) -> impl Iterator<Item = anyho
         .filter_map(Result::transpose)
 }
 
-pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()> {
+pub fn archive_image(image: &ImageAdv, source_base: &Path, target_base: &Path) -> anyhow::Result<()> {
     let mut target = target_base.join(image.date.format("%Y-%m-%d").to_string());
     fs::create_dir_all(&target)
         .with_context(|| format!("Failed to create directory {}", target.display()))?;
@@ -107,7 +107,7 @@ pub fn archive_image(image: &ImageAdv, target_base: &Path) -> anyhow::Result<()>
         bail!("File {} already exists", target.display());
     }
 
-    let abs_path = target_base.join(&image.basic.path);
+    let abs_path = source_base.join(&image.basic.path);
     fs::copy(&abs_path, &target).with_context(|| {
         format!(
             "Failed to copy to {} to {}",
