@@ -94,6 +94,7 @@ pub fn populate_new_table<'a, I>(
     conn: &Connection,
     table: TableType,
     images: I,
+    leave: bool,
 ) -> anyhow::Result<Vec<DuplicateImage>>
 where
     I: IntoIterator<Item = &'a ImageBasic>,
@@ -101,7 +102,8 @@ where
     let name = table.to_sql(true);
     conn.execute_batch(&format!(
         "
-        CREATE TEMP TABLE {name} (
+        DROP TABLE IF EXISTS {name};
+        CREATE {} TABLE {name} (
           name     TEXT NOT NULL,
           path     TEXT NOT NULL,
           size      INT NOT NULL
@@ -112,7 +114,8 @@ where
 
         CREATE INDEX {name}_uniq
         ON {name}(name, size);
-    "
+    ",
+        if leave { "" } else { "TEMP" },
     ))?;
 
     let mut stmt = conn.prepare(&format!(

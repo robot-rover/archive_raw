@@ -75,7 +75,11 @@ impl ImageExt for ImageAdv {
     }
 }
 
-const IGNORE_EXT: &[&str] = &["xmp", "pp3"];
+// xmp: Darktable sidecar file
+// pp3: Rawtherapee sidecar file
+// pto: Hugin (panorama) project file
+// txt: Text file
+const IGNORE_EXT: &[&str] = &["xmp", "pp3", "pto"];
 
 pub fn load_images<'a, I: ImageExt>(dir: &'a Path) -> impl Iterator<Item = anyhow::Result<I>> + use<'a, I> {
     WalkDir::new(dir)

@@ -1,4 +1,4 @@
-use log::warn;
+use anyhow::bail;
 use std::{env, ffi::OsStr, path::PathBuf};
 
 const HELP_STRING: &str = "\
@@ -8,6 +8,7 @@ usage: rawdb [-options] [source_dir]
     [--db <database_file>]  # The location to store the image database
     [-c | --clean]          # Clear the image database
     [-n | --dry-run]        # Index but don't archive
+    [-l | --leave]          # Do not remove temp tables
 ";
 
 pub struct AppArgs {
@@ -16,6 +17,7 @@ pub struct AppArgs {
     pub database_path: PathBuf,
     pub clean: bool,
     pub dry: bool,
+    pub leave: bool,
 }
 
 fn parse_path(os_str: &OsStr) -> Result<PathBuf, &'static str> {
@@ -44,12 +46,13 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
 
     let clean = pargs.contains(["-c", "--clean"]);
     let dry = pargs.contains(["-d", "--dry-run"]);
+    let leave = pargs.contains(["-l", "--leave"]);
 
     let source_dir = pargs.opt_free_from_os_str(parse_path).unwrap();
 
     let remaining = pargs.finish();
     if !remaining.is_empty() {
-        warn!("Unrecognized arguments: {:?}", remaining);
+        bail!("Unrecognized arguments: {:?}", remaining);
     }
 
     Ok(AppArgs {
@@ -58,5 +61,6 @@ pub fn parse_args() -> anyhow::Result<AppArgs> {
         database_path,
         clean,
         dry,
+        leave,
     })
 }

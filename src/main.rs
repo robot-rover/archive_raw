@@ -29,6 +29,7 @@ fn find_new_files(
     dir: &Path,
     label: &str,
     pb: ProgressBar,
+    leave: bool,
 ) -> anyhow::Result<()> {
     // Read file structure on disk, find rows that don't exist in in on_disk
     // An unknown file in the target is an error
@@ -37,7 +38,7 @@ fn find_new_files(
     info!("  Found {} {} images", target_images.len(), label);
 
     let trans = conn.transaction()?;
-    let duplicates = populate_new_table(&trans, table, &target_images)?;
+    let duplicates = populate_new_table(&trans, table, &target_images, leave)?;
     for dup in duplicates {
         error!("Possible duplicate file detected: {}", dup.name);
         for path in dup.paths {
@@ -101,13 +102,13 @@ fn main() -> anyhow::Result<()> {
         return Ok(())
     }
 
-    wrap_multi(&multi, |pb| find_new_files(&mut conn, Disk, &args.target_dir, "target", pb))?;
+    wrap_multi(&multi, |pb| find_new_files(&mut conn, Disk, &args.target_dir, "target", pb, args.leave))?;
 
     let Some(source_dir) = args.source_dir else {
         return Ok(());
     };
 
-    wrap_multi(&multi, |pb| find_new_files(&mut conn, Camera, &source_dir, "source", pb))?;
+    wrap_multi(&multi, |pb| find_new_files(&mut conn, Camera, &source_dir, "source", pb, args.leave))?;
 
     let images_to_archive = get_images_to_archive(&conn)?;
 
