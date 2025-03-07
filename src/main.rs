@@ -12,11 +12,10 @@ use db::{
 };
 use images::{archive_image, load_images, ImageAdv, ImageBasic};
 use indicatif::{
-    MultiProgress, ParallelProgressIterator, ProgressBar, ProgressStyle,
+    MultiProgress, ProgressBar, ProgressIterator, ProgressStyle
 };
 use indicatif_log_bridge::LogWrapper;
 use log::{error, info, warn, LevelFilter};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rusqlite::Connection;
 
 fn get_prog_style() -> ProgressStyle {
@@ -44,7 +43,7 @@ fn find_new_files(
     // For those new rows, read their metadata by actually opening the files
     pb.set_length(new_on.len() as u64);
     let new_on_adv = new_on
-        .into_par_iter()
+        .into_iter()
         .progress_with(pb)
         .with_message(format!("Indexing new {} images", table.label()))
         .filter_map(|i| {
@@ -111,7 +110,7 @@ fn main() -> anyhow::Result<()> {
     } else {
         let trans = conn.transaction()?;
         let success = images_to_archive
-            .into_par_iter()
+            .into_iter()
             .progress_with_style(get_prog_style())
             .with_message("Archiving images")
             .filter_map(|image| {
