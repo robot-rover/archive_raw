@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context};
 use std::{ffi::OsStr, fs, path::Path};
 
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime};
 use rexiv2::Metadata;
 use walkdir::{DirEntry, WalkDir};
 
@@ -45,22 +45,43 @@ pub struct ImageAdv {
     pub date: NaiveDateTime,
 }
 
+// mov: Quicktime movie
+// mp4: MPEG-4 video
+// avi: AVI video
+// webm: WebM video
+// mkv: Matroska video
+const VIDEO_EXT: &[&str] = &["mov", "mp4", "avi", "webm", "mkv"];
+
+
 impl ImageAdv {
     pub fn from_basic(basic: ImageBasic, base: &Path) -> anyhow::Result<Self> {
         let abs_path = base.join(&basic.path);
-        let metadata = Metadata::new_from_path(&abs_path)
-            .with_context(|| format!("Unrecognized image format in {}", abs_path.display()))?;
 
-        if !metadata.has_exif() {
-            bail!("No exif data found in {}", abs_path.display());
-        }
+        let is_movie = abs_path.extension().and_then(OsStr::to_str).map(|ext| VIDEO_EXT.contains(&ext.to_lowercase().as_str())).unwrap_or(false);
 
-        let date_str = metadata
-            .get_tag_string("Exif.Image.DateTime")
-            .with_context(|| format!("No exif date found in {}", abs_path.display()))?;
+        let date = if is_movie {
+            let metadata = ffprobe::ffprobe(&abs_path)
+                .with_context(|| format!("No metadata found on video file {}", abs_path.display()))?;
 
-        let date = NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
-            .with_context(|| format!("Unable to parse exif date in {}", abs_path.display()))?;
+            let Some(stream) = metadata.streams.into_iter().next() else { bail!("Video format has no streams: {}", abs_path.display()) };
+
+            let Some(date_str) = stream.tags.and_then(|tags| tags.creation_time) else { bail!("No creation time found in video file {}", abs_path.display()) };
+            DateTime::parse_from_rfc3339(&date_str)?.naive_local()
+        } else {
+            let metadata = Metadata::new_from_path(&abs_path)
+                .with_context(|| format!("Unrecognized image format in {}", abs_path.display()))?;
+
+            if !metadata.has_exif() {
+                bail!("No exif data found in {}", abs_path.display());
+            }
+
+            let date_str = metadata
+                .get_tag_string("Exif.Image.DateTime")
+                .with_context(|| format!("No exif date found in {}", abs_path.display()))?;
+
+            NaiveDateTime::parse_from_str(&date_str, "%Y:%m:%d %H:%M:%S")
+                .with_context(|| format!("Unable to parse exif date in {}", abs_path.display()))?
+        };
 
         Ok(ImageAdv { basic, date })
     }
@@ -76,7 +97,7 @@ impl ImageExt for ImageAdv {
 // pp3: Rawtherapee sidecar file
 // pto: Hugin (panorama) project file
 // txt: Text file
-const IGNORE_EXT: &[&str] = &["xmp", "pp3", "pto"];
+const IGNORE_EXT: &[&str] = &["xmp", "pp3", "pto", "txt"];
 
 pub fn load_images<'a, I: ImageExt>(
     dir: &'a Path,
@@ -89,7 +110,7 @@ pub fn load_images<'a, I: ImageExt>(
                     .extension()
                     .and_then(OsStr::to_str);
                 match ext {
-                    Some(ext) if IGNORE_EXT.contains(&ext) => Ok(None),
+                    Some(ext) if IGNORE_EXT.contains(&ext.to_lowercase().as_str()) => Ok(None),
                     _ => Ok(Some(I::from_entry(&entry, dir)?)),
                 }
             }

@@ -1,4 +1,5 @@
-set dotenv-load := true
+export RAWDB_TARGET := "target/images"
+export RAWDB_DB := "target/rawdb.sqlite"
 
 tables DB="${RAWDB_DB}":
   sqlite3 {{ DB }} 'PRAGMA application_id'
@@ -15,3 +16,8 @@ sample DB="${RAWDB_DB}":
 
 run *ARGS:
   cargo run -- {{ ARGS }}
+
+vars:
+  echo $RAWDB_DB
+  echo $RAWDB_TARGET
+  echo $RAWDB_LOG
