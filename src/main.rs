@@ -59,7 +59,7 @@ fn find_new_files(
         .collect::<Vec<_>>();
 
     // With that new metadata, add the rows to the database
-    add_to_table(&trans, table, new_on_adv)?;
+    add_to_table(&trans, table, &new_on_adv)?;
     trans.commit()?;
 
     Ok(())
@@ -111,21 +111,29 @@ fn main() -> anyhow::Result<()> {
         find_new_files(&mut conn, Camera, &source_dir, "source", pb, args.leave)
     })?;
 
-    let images_to_archive = get_images_to_archive(&conn)?;
+    let table_join = get_images_to_archive(&conn)?;
+
+    for mismatch in table_join.mismatch {
+        error!("Truncation detected");
+        for (path, size) in mismatch {
+            error!("{path} - {size} bytes");
+        }
+    }
 
     if args.dry {
         println!("Images to archive:");
-        for image in &images_to_archive {
+        for image in &table_join.to_archive {
             println!("  {}", image.basic.path);
         }
 
         return Ok(());
     }
     wrap_multi(&multi, |pb| {
-        pb.set_length(images_to_archive.len() as u64);
+        pb.set_length(table_join.to_archive.len() as u64);
 
         let trans = conn.transaction()?;
-        let success = images_to_archive
+        let success = table_join
+            .to_archive
             .into_iter()
             .progress_with(pb)
             .with_message("Archiving images")

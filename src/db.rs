@@ -1,9 +1,7 @@
 use std::path::Path;
 
-use anyhow::bail;
 use anyhow::Context;
 use log::debug;
-use log::error;
 use log::info;
 use rusqlite::{config::DbConfig, params, Connection};
 
@@ -236,7 +234,7 @@ pub fn update_table_get_new(
 
 pub fn add_to_table<'a, I>(conn: &Connection, table: TableType, images: I) -> anyhow::Result<()>
 where
-    I: IntoIterator<Item = ImageAdv>,
+    I: IntoIterator<Item = &'a ImageAdv>,
 {
     let name = table.to_sql(false);
     let mut stmt = conn.prepare(&format!(
@@ -259,7 +257,12 @@ where
     Ok(())
 }
 
-pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>> {
+pub struct ToArchive {
+    pub to_archive: Vec<ImageAdv>,
+    pub mismatch: Vec<[(String, i64); 2]>,
+}
+
+pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<ToArchive> {
     let mut stmt = conn.prepare(
         "
         SELECT on_camera.path, on_camera.size, on_disk.path, on_disk.size
@@ -273,19 +276,9 @@ pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>>
 
     let mismatch = stmt
         .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok([(row.get(0)?, row.get(1)?), (row.get(2)?, row.get(3)?)])
         })?
-        .collect::<Result<Vec<(String, i64, String, i64)>, _>>()?;
-
-    if !mismatch.is_empty() {
-        for (camera_path, camera_size, disk_path, disk_size) in mismatch {
-            error!(
-                "Image has size mismatch: Camera: {}={} Disk: {}={}",
-                camera_path, camera_size, disk_path, disk_size
-            );
-        }
-        bail!("Images with size mismatch detected");
-    }
+        .collect::<Result<Vec<[(String, i64); 2]>, _>>()?;
 
     let mut stmt = conn.prepare(
         "
@@ -299,7 +292,7 @@ pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>>
     ",
     )?;
 
-    let images = stmt
+    let to_archive = stmt
         .query_map([], |row| {
             Ok(ImageAdv {
                 basic: ImageBasic {
@@ -311,7 +304,10 @@ pub fn get_images_to_archive(conn: &Connection) -> anyhow::Result<Vec<ImageAdv>>
         })?
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(images)
+    Ok(ToArchive {
+        to_archive,
+        mismatch,
+    })
 }
 
 pub fn set_images_as_archived<'a, I>(conn: &Connection, saved: I) -> anyhow::Result<()>
@@ -354,6 +350,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::convert::identity;
+
     use super::*;
     use itertools::Itertools;
     use rand::prelude::*;
@@ -381,7 +379,7 @@ mod tests {
             let mut vec: Vec<ImageAdv> = Vec::new();
             if gen_images {
                 vec.extend(
-                    (0..rng.random_range(1..10)).map(|_| gen_random_image(&mut image_counter)),
+                    (0..rng.random_range(1..100)).map(|_| gen_random_image(&mut image_counter)),
                 );
             }
             vecs.push(vec);
@@ -424,12 +422,7 @@ mod tests {
             false,
         )
         .unwrap();
-        add_to_table(
-            &conn,
-            table,
-            vecs[1].iter().cloned().chain(vecs[2].iter().cloned()),
-        )
-        .unwrap();
+        add_to_table(&conn, table, vecs[1].iter().chain(vecs[2].iter())).unwrap();
 
         let actual_new = update_table_get_new(&conn, table).unwrap();
 
@@ -465,25 +458,19 @@ mod tests {
         add_to_table(
             &conn,
             TableType::Camera,
-            vecs[0].iter().cloned().chain(vecs[1].iter().cloned()),
+            vecs[0].iter().chain(vecs[1].iter()),
         )
         .unwrap();
-        add_to_table(
-            &conn,
-            TableType::Disk,
-            vecs[1].iter().cloned().chain(vecs[2].iter().cloned()),
-        )
-        .unwrap();
+        add_to_table(&conn, TableType::Disk, vecs[1].iter().chain(vecs[2].iter())).unwrap();
         if set_archived {
             set_images_as_archived(&conn, vecs[1].iter()).unwrap();
         }
 
         let actual_common = get_images_to_archive(&conn).unwrap();
 
-        assert_eq!(
-            vecs[0].iter().collect::<Vec<_>>(),
-            actual_common.iter().collect::<Vec<_>>(),
-        );
+        assert_eq!(vecs[0], actual_common.to_archive);
+
+        assert_eq!(actual_common.mismatch.len(), 0);
     }
 
     #[test]
@@ -495,6 +482,89 @@ mod tests {
                 new, common, old, set_archived
             );
             test_archive_images(new, common, old, set_archived);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_images() {
+        let mut counter = 0;
+        let mut images = (0..50)
+            .map(|_| gen_random_image(&mut counter).basic)
+            .collect::<Vec<_>>();
+        for i in 0..20 {
+            let mut dup = images[i].clone();
+            dup.path = dup.path.replace("path", "path2");
+            images.push(dup);
+        }
+
+        let duplicates = populate_new_table(
+            &create_conn(IN_MEMORY.as_ref(), false).unwrap(),
+            TableType::Disk,
+            &images,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(duplicates.len(), 20);
+        let mut found = vec![false; 20];
+
+        for dup_class in duplicates {
+            let index: usize = dup_class
+                .name
+                .split('.')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+                - 1;
+            assert!(!found[index]);
+            found[index] = true;
+            assert_eq!(dup_class.paths.len(), 2);
+        }
+
+        assert!(found.iter().cloned().all(identity));
+    }
+
+    fn test_trunc_images(set_archived: bool) {
+        let mut image_counter = 0;
+        let mut common = (0..50)
+            .map(|_| gen_random_image(&mut image_counter))
+            .collect::<Vec<_>>();
+
+        let conn = create_conn(IN_MEMORY.as_ref(), false).unwrap();
+
+        // Setup tables
+        add_to_table(&conn, TableType::Camera, common.iter()).unwrap();
+
+        common[40].basic.size -= 5;
+        common[2].basic.size += 1;
+        common[7].basic.size = 0;
+        add_to_table(&conn, TableType::Disk, common.iter()).unwrap();
+
+        if set_archived {
+            set_images_as_archived(&conn, common.iter()).unwrap();
+        }
+
+        let mut actual_common = get_images_to_archive(&conn).unwrap();
+
+        assert_eq!(actual_common.to_archive.len(), 0);
+
+        actual_common.mismatch.sort_by(|a, b| a[0].0.cmp(&b[0].0));
+
+        for (idx, im_idx) in [2, 40, 7].into_iter().enumerate() {
+            assert_eq!(actual_common.mismatch[idx][1].0, common[im_idx].basic.path);
+            assert_eq!(
+                actual_common.mismatch[idx][1].1,
+                common[im_idx].basic.size as i64
+            );
+        }
+    }
+
+    #[test]
+    fn test_trunc_images_loop() {
+        for set_archived in [false, true] {
+            println!("set_archived: {}", set_archived);
+            test_trunc_images(set_archived);
         }
     }
 }
