@@ -52,20 +52,31 @@ pub struct ImageAdv {
 // mkv: Matroska video
 const VIDEO_EXT: &[&str] = &["mov", "mp4", "avi", "webm", "mkv"];
 
-
 impl ImageAdv {
     pub fn from_basic(basic: ImageBasic, base: &Path) -> anyhow::Result<Self> {
         let abs_path = base.join(&basic.path);
 
-        let is_movie = abs_path.extension().and_then(OsStr::to_str).map(|ext| VIDEO_EXT.contains(&ext.to_lowercase().as_str())).unwrap_or(false);
+        let is_movie = abs_path
+            .extension()
+            .and_then(OsStr::to_str)
+            .map(|ext| VIDEO_EXT.contains(&ext.to_lowercase().as_str()))
+            .unwrap_or(false);
 
         let date = if is_movie {
-            let metadata = ffprobe::ffprobe(&abs_path)
-                .with_context(|| format!("No metadata found on video file {}", abs_path.display()))?;
+            let metadata = ffprobe::ffprobe(&abs_path).with_context(|| {
+                format!("No metadata found on video file {}", abs_path.display())
+            })?;
 
-            let Some(stream) = metadata.streams.into_iter().next() else { bail!("Video format has no streams: {}", abs_path.display()) };
+            let Some(stream) = metadata.streams.into_iter().next() else {
+                bail!("Video format has no streams: {}", abs_path.display())
+            };
 
-            let Some(date_str) = stream.tags.and_then(|tags| tags.creation_time) else { bail!("No creation time found in video file {}", abs_path.display()) };
+            let Some(date_str) = stream.tags.and_then(|tags| tags.creation_time) else {
+                bail!(
+                    "No creation time found in video file {}",
+                    abs_path.display()
+                )
+            };
             DateTime::parse_from_rfc3339(&date_str)?.naive_local()
         } else {
             let metadata = Metadata::new_from_path(&abs_path)

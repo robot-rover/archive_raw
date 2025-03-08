@@ -31,7 +31,7 @@ fn find_new_files(
 ) -> anyhow::Result<()> {
     // Read file structure on disk, find rows that don't exist in in on_disk
     // An unknown file in the target is an error
-    eprintln!("Scanning {} at {}", label, dir.display());
+    info!("Scanning {} at {}", label, dir.display());
     let target_images = load_images::<ImageBasic>(dir).collect::<Result<Vec<_>, _>>()?;
     info!("  Found {} {} images", target_images.len(), label);
 
@@ -91,11 +91,11 @@ fn main() -> anyhow::Result<()> {
 
     let args = parse_args()?;
 
-    eprintln!("Loading database at {}", args.database_path.display());
+    info!("Loading database at {}", args.database_path.display());
     let mut conn = db::create_conn(&args.database_path, args.clean)?;
 
     if args.clean {
-        eprintln!("Database cleaned, exiting...");
+        info!("Database cleaned, exiting...");
         return Ok(());
     }
 
@@ -121,9 +121,9 @@ fn main() -> anyhow::Result<()> {
     }
 
     if args.dry {
-        println!("Images to archive:");
+        eprintln!("Images to archive:");
         for image in &table_join.to_archive {
-            println!("  {}", image.basic.path);
+            eprintln!("  {}", image.basic.path);
         }
 
         return Ok(());
@@ -147,7 +147,7 @@ fn main() -> anyhow::Result<()> {
 
         set_images_as_archived(&trans, success.iter())?;
         trans.commit()?;
-        eprintln!("Archived {} images", success.len());
+        info!("Archived {} images", success.len());
 
         Ok(())
     })
