@@ -7,7 +7,7 @@ usage: rawdb [-options] [source_dir]
     [--target <target_dir>] # The directory place archived images
     [--db <database_file>]  # The location to store the image database
     [-c | --clean]          # Clear the image database
-    [-n | --dry-run]        # Index but don't archive
+    [-d | --dry-run]        # Index but don't archive
     [-l | --leave]          # Do not remove temp tables
 ";
 
